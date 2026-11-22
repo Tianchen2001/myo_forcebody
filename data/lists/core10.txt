@@ -1,0 +1,10 @@
+data/ForceBody/trials/Carter2023/S13/Carter2023_S13_walk_006.npz
+data/ForceBody/trials/Carter2023/S46/Carter2023_S46_walk_017.npz
+data/ForceBody/trials/Carter2023/S08/Carter2023_S08_walk_010.npz
+data/ForceBody/trials/Carter2023/S24/Carter2023_S24_walk_003.npz
+data/ForceBody/trials/Moore2015/S06/Moore2015_S06_walk_032.npz
+data/ForceBody/trials/Moore2015/S16/Moore2015_S16_walk_060.npz
+data/ForceBody/trials/Moore2015/S15/Moore2015_S15_walk_086.npz
+data/ForceBody/trials/Uhlrich2023/S07/Uhlrich2023_S07_walk_001.npz
+data/ForceBody/trials/Falisse2017/S08/Falisse2017_S08_walk_002.npz
+data/ForceBody/trials/Han2023/S05/Han2023_S05_walk_001.npz
