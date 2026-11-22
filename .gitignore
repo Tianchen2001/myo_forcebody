@@ -1,0 +1,7 @@
+data/
+clips/
+videos/
+logs/
+.venv
+__pycache__/
+wandb/

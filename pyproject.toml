@@ -1,0 +1,10 @@
+[project]
+name = "myo-forcebody"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "imageio>=2.38.2",
+    "imageio-ffmpeg>=0.8.1",
+    "myosuite[mjlab,musclemimic]>=3.1.0",
+    "orbax-checkpoint>=0.12.12",
+]

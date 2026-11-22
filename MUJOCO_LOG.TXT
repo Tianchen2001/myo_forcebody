@@ -1,0 +1,14 @@
+WARNING Sun Nov 22 13:18:12 2026: Attach conflict when attaching 'MuscleMimic and MyoSuite MyoFullBody' to 'mjlab scene', policy is 'warning'
+timestep: parent has 0.002 (default), child has 0.001, keeping parent value
+njmax: parent has -1 (default), child has 5000, keeping parent value
+nconmax: parent has -1 (default), child has 2000, keeping parent value
+nkey: parent has 0 (default), child has 1, keeping parent value
+nuser_jnt: parent has -1 (default), child has 1, keeping parent value
+
+WARNING Sun Nov 22 13:26:26 2026: Attach conflict when attaching 'MuscleMimic and MyoSuite MyoFullBody' to 'mjlab scene', policy is 'warning'
+timestep: parent has 0.002 (default), child has 0.001, keeping parent value
+njmax: parent has -1 (default), child has 5000, keeping parent value
+nconmax: parent has -1 (default), child has 2000, keeping parent value
+nkey: parent has 0 (default), child has 1, keeping parent value
+nuser_jnt: parent has -1 (default), child has 1, keeping parent value
+
