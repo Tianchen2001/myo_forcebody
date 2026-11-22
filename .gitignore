@@ -6,3 +6,5 @@ wandb/
 .venv
 __pycache__/
 *.mp4
+MUJOCO_LOG.TXT
+MUJOCO_LOG.txt
