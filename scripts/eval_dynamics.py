@@ -84,6 +84,29 @@ def find_trial(clip_path: Path, given: Path | None) -> Path:
     return hits[0]
 
 
+def limit_forces(model, qpos: np.ndarray, qvel: np.ndarray, act: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Generalized force of the joint-limit constraints, (T, nv), and of muscles + passive, (T, nv).
+
+    The recorded states are replayed with the CPU solver: mj_forward at (qpos, qvel, act) solves all
+    constraints; the rows of type mjCNSTR_LIMIT_JOINT are the joint limits. A joint limit acts on a
+    single degree of freedom with Jacobian +1 (lower limit) or -1 (upper limit), so its generalized
+    force is +efc_force or -efc_force on that degree of freedom.
+    """
+    import mujoco
+
+    d = mujoco.MjData(model)
+    out, muscles = np.zeros((len(qpos), model.nv)), np.zeros((len(qpos), model.nv))
+    for k in range(len(qpos)):
+        d.qpos[:], d.qvel[:], d.act[:] = qpos[k], qvel[k], act[k]
+        mujoco.mj_forward(model, d)
+        muscles[k] = d.qfrc_actuator + d.qfrc_passive
+        for i in np.flatnonzero(d.efc_type == mujoco.mjtConstraint.mjCNSTR_LIMIT_JOINT):
+            j = int(d.efc_id[i])
+            q, (lo, hi) = d.qpos[model.jnt_qposadr[j]], model.jnt_range[j]
+            out[k, model.jnt_dofadr[j]] += d.efc_force[i] * (1.0 if q - lo < hi - q else -1.0)
+    return out, muscles
+
+
 class Coupling:
     """Projection of generalized forces onto independent coordinates (joint equalities)."""
 
@@ -177,7 +200,7 @@ def main() -> None:
 
     with fixed_start_frame(0):
         obs, _ = env.reset()
-    qpos, qfrc, grf = [], [], []
+    qpos, qvel, act, qfrc, grf = [], [], [], [], []
     done, step = False, 0
     with torch.no_grad():
         while not done:
@@ -187,12 +210,15 @@ def main() -> None:
             if done:  # the environment has already been reset
                 break
             qpos.append(data.qpos[0].cpu().numpy().astype(np.float64))
+            qvel.append(data.qvel[0].cpu().numpy().astype(np.float64))
+            act.append(data.act[0].cpu().numpy().astype(np.float64))
             qfrc.append((data.qfrc_actuator[0] + data.qfrc_passive[0]).cpu().numpy().astype(np.float64))
             # force of the foot on the ground, mean over the substeps -> ground on the foot
             grf.append(-sensor.data.force_history[0].mean(dim=-2).cpu().numpy().astype(np.float64))
     ended = [k.split("/")[-1] for k, v in extras.get("log", {}).items()
              if k.startswith("Episode_Termination/") and float(v) > 0]
     qpos, qfrc, grf = np.asarray(qpos), np.asarray(qfrc), np.asarray(grf)  # (T, nq), (T, nv), (T, 2, 3)
+    qvel, act = np.asarray(qvel), np.asarray(act)
     n = len(qpos)
     frames = np.arange(1, n + 1)  # state after step k is compared with clip frame k
     if n < 50:
@@ -206,6 +232,7 @@ def main() -> None:
         print(f"[warn] trial has {n_trial} frames, clip has {int(source.n_frames)}: frame alignment may be off")
     keep = frames < n_trial
     frames, qpos, qfrc, grf, n = frames[keep], qpos[keep], qfrc[keep], grf[keep], int(keep.sum())
+    qvel, act = qvel[keep], act[keep]
     has_tau = "tau_selfconsistent" in trial.files
     tau_fb = np.asarray(trial["tau_selfconsistent"], float)[frames] / m_dyn if has_tau else None
     sig_fb = np.asarray(trial["sigma_tau"], float)[frames] / m_dyn if "sigma_tau" in trial.files else None
@@ -218,6 +245,9 @@ def main() -> None:
 
     # ---------------- simulation ----------------
     coupling = Coupling(model)
+    qfrc_limit, qfrc_cpu = limit_forces(model, qpos, qvel, act)
+    leg_dofs = [model.jnt_dofadr[coupling.joint(m_.format(s=sd))] for sd in "rl" for _, m_ in LEG]
+    replay_err = float(np.abs(qfrc_cpu - qfrc)[:, leg_dofs].mean() / mass)
     rate = 1.0 / dt
     grf_sim = lowpass(grf / (mass * G), args.cutoff, rate)
     t = frames * dt
@@ -233,6 +263,10 @@ def main() -> None:
             ax = axes[r, c]
             ax.plot(t, raw, color="tab:blue", lw=0.5, alpha=0.3)
             ax.plot(t, sim, color="tab:blue", lw=1.5, label="policy (muscles + passive)")
+            lim_raw = coupling.project(myo_name, qpos, qfrc_limit) / mass
+            net = lowpass(raw + lim_raw, args.cutoff, rate)
+            if np.abs(lim_raw).max() > 1e-3:
+                ax.plot(t, net, color="tab:orange", lw=1.2, label="policy + joint limit")
             j = coupling.joint(myo_name)
             q_sim = qpos[:, model.jnt_qposadr[j]]
             q_ref = q_fb[:, names.index(fb_name)]
@@ -265,6 +299,10 @@ def main() -> None:
                 row["rmse"] = float(np.sqrt(np.mean((sim - ref)[tau_ok] ** 2)))
                 row["r"] = float(np.corrcoef(sim[tau_ok], ref[tau_ok])[0, 1])
                 row["range_ref"] = float(np.ptp(ref[tau_ok]))
+                row["r_net"] = float(np.corrcoef(net[tau_ok], ref[tau_ok])[0, 1])
+                row["rmse_net"] = float(np.sqrt(np.mean((net - ref)[tau_ok] ** 2)))
+            row["limit_abs"] = float(np.abs(lim_raw).mean())
+            row["limit_peak"] = float(np.abs(lowpass(lim_raw, args.cutoff, rate)).max())
             rows.append(row)
             ax.set_ylabel("N m / kg")
             ax.set_title(myo_name, fontsize=9, loc="left")
@@ -309,7 +347,8 @@ def main() -> None:
     fig.savefig(args.out / f"{tag}_grf.png", dpi=130)
     plt.close(fig)
 
-    np.savez_compressed(args.out / f"{tag}_dynamics.npz", t=t, frames=frames, qpos=qpos, qfrc=qfrc, grf_sim_n=grf,
+    np.savez_compressed(args.out / f"{tag}_dynamics.npz", t=t, frames=frames, qpos=qpos, qvel=qvel, act=act, qfrc=qfrc,
+                        qfrc_limit=qfrc_limit, grf_sim_n=grf,
                         model_mass=mass, trial=str(trial_path), cutoff=args.cutoff)
 
     print(f"[eval] {tag} on {trial_path.name}: {n} steps ({n * dt:.2f} s), ended by {', '.join(ended) or 'unknown'}")
@@ -327,6 +366,11 @@ def main() -> None:
                   f"{row['rmse']:10.3f} {row['range_ref']:11.3f} {row['r']:7.2f} {row.get('mean_sigma', float('nan')):11.3f} "
                   f"{row.get('within_2sigma', float('nan')):14.0%}{note}")
         print("       (torque statistics use the same low-pass on both sides; 'at limit' = policy within 2 deg of a joint limit)")
+        print("       joint-limit torque (CPU replay of the recorded states)      mean |limit|   peak |limit|   r muscles   r muscles+limit   RMSE muscles   RMSE muscles+limit")
+        for row in rows:
+            print(f"       {row['coordinate']:18s} {'':41s} {row['limit_abs']:10.3f} {row['limit_peak']:14.3f} {row['r']:11.2f} {row['r_net']:17.2f} "
+                  f"{row['rmse']:14.3f} {row['rmse_net']:20.3f}")
+        print(f"       replay check: mean |muscles + passive, CPU replay - recorded| over the leg coordinates = {replay_err:.4f} N m / kg")
     print("       GRF (body weight)            RMSE        r    peak policy   peak ForceBody")
     for row in grf_rows:
         print(f"       {row['foot']:5s} {row['component']:13s} {row['rmse']:10.3f} {row['r']:8.2f} {row['peak_sim']:11.2f} {row['peak_ref']:14.2f}")
