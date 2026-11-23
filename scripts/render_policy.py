@@ -30,7 +30,7 @@ ENTITY, VARIANT = "mimic_fullbody_robot", "fullbody"
 MAX_REWARD = {"myoMimicFullbody-v0": 5.05, "myoMuscleMimicFullbody-v0": 5.05, "fbMuscleMimic-S1-v0": 1.21}
 
 
-def annotate(frame: np.ndarray, title: str, k: int, rewards: np.ndarray, dt: float, top: float) -> np.ndarray:
+def annotate(frame: np.ndarray, title: str, k: int, rewards: np.ndarray, dt: float, top: float, extra: str = "") -> np.ndarray:
     """Write the reward of step *k* on the frame and plot the reward of the whole episode."""
     img = Image.fromarray(np.asarray(frame)).convert("RGB")
     w, h = img.size
@@ -39,6 +39,8 @@ def annotate(frame: np.ndarray, title: str, k: int, rewards: np.ndarray, dt: flo
     now = rewards[k - 1] if k > 0 else float("nan")
     mean = rewards[:k].mean() if k > 0 else float("nan")
     lines = [title, f"t = {k * dt:5.2f} s", f"reward {now:5.2f} / {top:.2f}   mean so far {mean:5.2f}"]
+    if extra:
+        lines.append(extra)
     line_h = int(font.size * 1.35)
     draw.rectangle([0, 0, w, 8 + line_h * len(lines)], fill=(0, 0, 0, 140))
     for i, text in enumerate(lines):
@@ -110,6 +112,16 @@ def main() -> None:
     from mjlab.tasks.registry import list_tasks, load_env_cfg, load_rl_cfg, load_runner_cls
     from myosuite.envs.myo.backends.mjlab.mimic_mjlab_env import _resolve_mimic_mjlab_ids
 
+    from myo_forcebody.tasks import mm_terms
+
+    mm_reward = mm_terms.mimic_reward()
+
+    def mm_measures() -> tuple[float, float, float, float]:
+        """Official MuscleMimic reward and deviations of the current state, whatever the task."""
+        e = mm_terms._errors(base)
+        return (float(mm_reward(base)[0]), 100 * float(e["site_dev"][0]), 100 * float(e["root_dev"][0]),
+                float(np.degrees(e["root_ori"][0].cpu())))
+
     if args.task not in list_tasks():
         raise SystemExit(f"task {args.task!r} is not registered; is MYOSUITE_MIMIC_CLIP set to an existing clip?")
     device = args.device or ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -143,12 +155,15 @@ def main() -> None:
 
         name = f"{ckpt.resolve().parent.parent.name}_it{int(ckpt.stem.split('_')[1]):05d}.mp4"
         frames, frame_steps, rewards, step, done = [base.render()], [0], [], 0, False
+        measures = []  # per step: MuscleMimic reward, site deviation (cm), root deviation (cm), root orientation (deg)
         with torch.no_grad():
             while not done and step < max_steps:
                 obs, rew, dones, extras = env.step(policy(obs))
                 step += 1
                 rewards.append(float(rew[0]))
                 done = bool(dones[0])
+                if not done:  # after the last step the environment has already been reset
+                    measures.append(mm_measures())
                 if not done and step % every == 0:
                     frames.append(base.render())
                     frame_steps.append(step)
@@ -160,13 +175,27 @@ def main() -> None:
         rewards = np.asarray(rewards)
         top = MAX_REWARD.get(args.task) or float(max(rewards.max(), 1e-6))
         title = f"{ckpt.resolve().parent.parent.name}   iteration {int(ckpt.stem.split('_')[1])}   start frame {started}"
+        measures = np.asarray(measures).reshape(-1, 4)
+
+        def extra(k: int) -> str:
+            if k == 0 or k > len(measures):
+                return ""
+            m = measures[k - 1]
+            return f"MuscleMimic reward {m[0]:.2f} / 1.21   site {m[1]:.1f} cm   root {m[2]:.1f} cm   root tilt {m[3]:.1f} deg"
+
         if not args.no_overlay:
-            frames = [annotate(f, title, k, rewards, base.step_dt, top) for f, k in zip(frames, frame_steps)]
+            frames = [annotate(f, title, k, rewards, base.step_dt, top, extra(k)) for f, k in zip(frames, frame_steps)]
         imageio.mimsave(args.out / name, [np.asarray(f) for f in frames], fps=round(1.0 / (every * base.step_dt)), macro_block_size=1)
         print(
             f"[render] {args.out / name}: start frame {started}, {step} steps ({step * base.step_dt:.2f} s), "
             f"ended by {', '.join(ended) or 'unknown'}, reward per step {np.mean(rewards):.3f}"
         )
+        if len(measures):
+            m = measures.mean(0)
+            print(
+                f"         MuscleMimic measures (mean): reward {m[0]:.3f} / 1.21, relative site deviation {m[1]:.1f} cm, "
+                f"root deviation {m[2]:.1f} cm (max {measures[:, 2].max():.1f}), root orientation {m[3]:.1f} deg (max {measures[:, 3].max():.1f})"
+            )
     env.close()
 
 

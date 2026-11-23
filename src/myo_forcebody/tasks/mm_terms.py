@@ -266,10 +266,22 @@ def mimic_termination(cfg: TerminationCfg | None = None) -> Callable[[Any], torc
     return _fn
 
 
+REWARD_TERMS = ("rpos", "rquat", "rvel_rot", "rvel_lin", "qpos", "qvel", "root_pos", "root_vel")
+DEVIATIONS = ("site_dev", "root_dev", "root_ori")  # m, m, rad
+
+
 def metric(name: str) -> Callable[[Any], torch.Tensor]:
-    """One raw error for logging, shape (N,): site_dev, root_dev (m), root_ori (rad)."""
+    """One quantity for logging, shape (N,).
+
+    A name in REWARD_TERMS gives exp(-scale * error) of that reward term, in (0, 1];
+    a name in DEVIATIONS gives the raw deviation used by the termination.
+    """
+    if name not in REWARD_TERMS + DEVIATIONS:
+        raise ValueError(f"unknown metric {name!r}")
 
     def _fn(env: Any) -> torch.Tensor:
-        return _errors(env)[name]
+        if name in DEVIATIONS:
+            return _errors(env)[name]
+        return reward_components(env)[name]
 
     return _fn

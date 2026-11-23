@@ -20,6 +20,7 @@ S1_TASK = "fbMuscleMimic-S1-v0"
 
 def _stage1(env_cfg):
     """Swap reward and deviation termination for the official definitions."""
+    from mjlab.managers.metrics_manager import MetricsTermCfg
     from mjlab.managers.reward_manager import RewardTermCfg
     from mjlab.managers.termination_manager import TerminationTermCfg
 
@@ -32,6 +33,10 @@ def _stage1(env_cfg):
     if "mimic_deviation" not in env_cfg.terminations:
         raise RuntimeError(f"{BASE_TASK} has no 'mimic_deviation' termination to replace")
     env_cfg.terminations["mimic_deviation"] = TerminationTermCfg(func=mm_terms.mimic_termination())
+    # Logged as Episode_Metrics/<name>: mean over the steps of an episode.
+    env_cfg.metrics = {
+        name: MetricsTermCfg(func=mm_terms.metric(name)) for name in mm_terms.REWARD_TERMS + mm_terms.DEVIATIONS
+    }
     return env_cfg
 
 
