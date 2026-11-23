@@ -9,3 +9,4 @@ __pycache__/
 MUJOCO_LOG.TXT
 MUJOCO_LOG.txt
 playback/
+eval/
