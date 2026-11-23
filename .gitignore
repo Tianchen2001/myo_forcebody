@@ -8,3 +8,4 @@ __pycache__/
 *.mp4
 MUJOCO_LOG.TXT
 MUJOCO_LOG.txt
+playback/
