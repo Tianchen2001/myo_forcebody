@@ -211,6 +211,8 @@ def main() -> None:
     sig_fb = np.asarray(trial["sigma_tau"], float)[frames] / m_dyn if "sigma_tau" in trial.files else None
     tau_ok = np.asarray(trial["tau_frame_ok"], bool)[frames] if "tau_frame_ok" in trial.files else np.ones(n, bool)
     grf_ok = np.asarray(trial["grf_frame_ok"], bool)[frames] if "grf_frame_ok" in trial.files else np.ones(n, bool)
+    mc_ok = np.asarray(trial["mc_frame_ok"], bool)[frames] if "mc_frame_ok" in trial.files else tau_ok  # mask for sigma_tau
+    label_usable = bool(trial["torque_label_usable"]) if "torque_label_usable" in trial.files else True
     grf_fb = np.asarray(trial["grf"], float)[frames][:, :2] @ C.T / (m_dyn * G)  # (T, 2, 3), right then left
     q_fb = np.asarray(trial["q_gt"], float)[frames]
 
@@ -258,8 +260,8 @@ def main() -> None:
                 if sig_fb is not None:
                     s = sig_fb[:, names.index(fb_name)]
                     ax.fill_between(t, ref - 2 * s, ref + 2 * s, color="k", alpha=0.15, lw=0, label="± 2 sigma")
-                    row["mean_sigma"] = float(s[tau_ok].mean())
-                    row["within_2sigma"] = float(np.mean(np.abs(sim - ref)[tau_ok] <= 2 * s[tau_ok]))
+                    row["mean_sigma"] = float(s[mc_ok].mean())
+                    row["within_2sigma"] = float(np.mean(np.abs(sim - ref)[mc_ok] <= 2 * s[mc_ok]))
                 row["rmse"] = float(np.sqrt(np.mean((sim - ref)[tau_ok] ** 2)))
                 row["r"] = float(np.corrcoef(sim[tau_ok], ref[tau_ok])[0, 1])
                 row["range_ref"] = float(np.ptp(ref[tau_ok]))
@@ -312,7 +314,9 @@ def main() -> None:
 
     print(f"[eval] {tag} on {trial_path.name}: {n} steps ({n * dt:.2f} s), ended by {', '.join(ended) or 'unknown'}")
     print(f"       masses: model {mass:.1f} kg, subject {m_dyn:.1f} kg (dynamics); low-pass {args.cutoff:g} Hz; "
-          f"frames usable: torque {tau_ok.mean():.0%}, GRF {grf_ok.mean():.0%}")
+          f"frames usable: torque {tau_ok.mean():.0%}, sigma {mc_ok.mean():.0%}, GRF {grf_ok.mean():.0%}")
+    if not label_usable:
+        print("       [warn] torque_label_usable is False for this trial: its torque labels should not be used")
     total_sim, total_ref = grf_sim.sum(1)[:, 2].mean(), grf_fb.sum(1)[:, 2].mean()
     print(f"       mean total vertical GRF: policy {total_sim:.3f} BW, ForceBody {total_ref:.3f} BW (both should be near 1)")
     if has_tau:
